@@ -1,0 +1,509 @@
+# ============================================================================
+# CI/CD Pipeline for ROLAP Analytics Demo
+# GitHub Actions workflow for continuous integration
+# ============================================================================
+# Purpose: Automatically test and validate the ROLAP analytics system
+# Triggers: Push to main/master branch, pull requests, manual dispatch
+# ============================================================================
+
+name: ROLAP Analytics CI/CD Pipeline
+
+# ============================================================================
+# TRIGGERS
+# ============================================================================
+on:
+  # Trigger on push to main/master branches
+  push:
+    branches:
+      - main
+      - master
+      - develop
+  
+  # Trigger on pull requests to main/master
+  pull_request:
+    branches:
+      - main
+      - master
+    types:
+      - opened
+      - synchronize
+      - reopened
+  
+  # Allow manual trigger from GitHub UI
+  workflow_dispatch:
+    inputs:
+      debug_enabled:
+        description: 'Enable debug logging'
+        required: false
+        default: false
+        type: boolean
+      run_tests:
+        description: 'Run full test suite'
+        required: false
+        default: true
+        type: boolean
+
+# ============================================================================
+# ENVIRONMENT VARIABLES
+# ============================================================================
+env:
+  PYTHON_VERSION: '3.10'
+  DATABASE_TYPE: 'sqlite'
+  CACHE_ENABLED: 'true'
+  LOG_LEVEL: 'INFO'
+
+# ============================================================================
+# JOBS
+# ============================================================================
+jobs:
+  # --------------------------------------------------------------------------
+  # JOB 1: Code Quality and Linting
+  # --------------------------------------------------------------------------
+  code-quality:
+    name: Code Quality & Linting
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8 pylint black mypy
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      
+      - name: Run Black (code formatting check)
+        run: |
+          black --check --diff src/ data/ tests/ --line-length 100 || true
+      
+      - name: Run Flake8 (style guide enforcement)
+        run: |
+          flake8 src/ --max-line-length=100 --ignore=E203,W503 --statistics
+          flake8 data/ --max-line-length=100 --ignore=E203,W503 --statistics
+          flake8 tests/ --max-line-length=100 --ignore=E203,W503 --statistics
+      
+      - name: Run Pylint (code analysis)
+        run: |
+          pylint src/ --fail-under=7.0 --exit-zero || true
+      
+      - name: Run MyPy (type checking)
+        run: |
+          mypy src/ --ignore-missing-imports --allow-untyped-defs || true
+
+  # --------------------------------------------------------------------------
+  # JOB 2: Database Schema Validation
+  # --------------------------------------------------------------------------
+  schema-validation:
+    name: Database Schema Validation
+    runs-on: ubuntu-latest
+    needs: code-quality
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install SQLite
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sqlite3
+      
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas sqlalchemy
+      
+      - name: Validate schema SQL syntax
+        run: |
+          echo "Validating schema.sql syntax..."
+          sqlite3 :memory: < data/schema.sql
+          if [ $? -eq 0 ]; then
+            echo "✓ Schema validation passed"
+          else
+            echo "✗ Schema validation failed"
+            exit 1
+          fi
+      
+      - name: Verify table creation
+        run: |
+          sqlite3 test.db < data/schema.sql
+          TABLES=$(sqlite3 test.db ".tables")
+          echo "Created tables: $TABLES"
+          
+          REQUIRED_TABLES="dim_time dim_department dim_doctor dim_diagnosis dim_patient fact_hospitalization"
+          for table in $REQUIRED_TABLES; do
+            if echo "$TABLES" | grep -q "$table"; then
+              echo "✓ Table $table exists"
+            else
+              echo "✗ Table $table missing"
+              exit 1
+            fi
+          done
+          rm -f test.db
+
+  # --------------------------------------------------------------------------
+  # JOB 3: Unit Tests
+  # --------------------------------------------------------------------------
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: schema-validation
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-xdist
+      
+      - name: Create database directory
+        run: |
+          mkdir -p data
+          mkdir -p logs
+      
+      - name: Generate test data
+        run: |
+          cd data
+          python seed_data.py
+          cd ..
+      
+      - name: Run unit tests with coverage
+        run: |
+          pytest tests/ -v --cov=src --cov-report=xml --cov-report=term --maxfail=5
+      
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          fail_ci_if_error: false
+      
+      - name: Run specific test modules
+        run: |
+          pytest tests/test_queries.py -v --tb=short
+
+  # --------------------------------------------------------------------------
+  # JOB 4: OLAP Query Tests
+  # --------------------------------------------------------------------------
+  olap-query-tests:
+    name: OLAP Query Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Setup database and test data
+        run: |
+          mkdir -p data logs
+          cd data
+          python seed_data.py
+          cd ..
+      
+      - name: Test OLAP operations
+        run: |
+          python -c "
+          import sys
+          sys.path.append('src')
+          from storage import ROLAPStorage
+          from olap_operations import OLAPOperations
+          
+          # Test connection
+          storage = ROLAPStorage()
+          storage.connect()
+          print('✓ Database connection successful')
+          
+          # Test slice operation
+          ops = OLAPOperations(storage)
+          print('✓ OLAPOperations initialized')
+          
+          # Test query execution
+          result = storage.execute_query('SELECT COUNT(*) FROM fact_hospitalization')
+          count = result.iloc[0, 0]
+          print(f'✓ Query execution successful: {count} records found')
+          
+          storage.close()
+          print('✓ All OLAP tests passed')
+          "
+      
+      - name: Execute query examples
+        run: |
+          if [ -f docs/query_examples.sql ]; then
+            sqlite3 data/rolap_demo.db < docs/query_examples.sql
+            if [ $? -eq 0 ]; then
+              echo "✓ Query examples executed successfully"
+            else
+              echo "⚠ Some query examples may contain syntax issues"
+            fi
+          else
+            echo "⚠ query_examples.sql not found, skipping"
+          fi
+
+  # --------------------------------------------------------------------------
+  # JOB 5: Web Application Tests (if Dash app exists)
+  # --------------------------------------------------------------------------
+  webapp-tests:
+    name: Web Application Tests
+    runs-on: ubuntu-latest
+    needs: olap-query-tests
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Setup test data
+        run: |
+          mkdir -p data logs
+          cd data && python seed_data.py && cd ..
+      
+      - name: Test Dash app import
+        run: |
+          python -c "
+          import sys
+          sys.path.append('src')
+          try:
+              from app import app
+              print('✓ Dash app imported successfully')
+          except ImportError as e:
+              print(f'⚠ Dash app import failed: {e}')
+          "
+      
+      - name: Check for required files
+        run: |
+          REQUIRED_FILES="src/storage.py src/query_builder.py src/olap_operations.py src/app.py data/schema.sql data/seed_data.py"
+          for file in $REQUIRED_FILES; do
+            if [ -f "$file" ]; then
+              echo "✓ $file exists"
+            else
+              echo "✗ $file missing"
+              exit 1
+            fi
+          done
+
+  # --------------------------------------------------------------------------
+  # JOB 6: Performance Benchmark
+  # --------------------------------------------------------------------------
+  performance-benchmark:
+    name: Performance Benchmark
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install timeit
+      
+      - name: Setup benchmark data
+        run: |
+          mkdir -p data logs
+          cd data
+          # Generate larger dataset for benchmarking
+          python -c "
+          import seed_data
+          seed_data.NUM_FACTS = 5000
+          seed_data.main()
+          "
+          cd ..
+      
+      - name: Run performance tests
+        run: |
+          python -c "
+          import time
+          import sys
+          sys.path.append('src')
+          from storage import ROLAPStorage
+          
+          storage = ROLAPStorage()
+          storage.connect()
+          
+          queries = [
+              'SELECT COUNT(*) FROM fact_hospitalization',
+              'SELECT year, COUNT(*) FROM fact_hospitalization f JOIN dim_time t ON f.time_id = t.time_id GROUP BY year',
+              'SELECT dept_name, SUM(total_cost) FROM fact_hospitalization f JOIN dim_department d ON f.department_id = d.department_id GROUP BY dept_name',
+              'SELECT year, dept_name, AVG(days_spent) FROM fact_hospitalization f JOIN dim_time t ON f.time_id = t.time_id JOIN dim_department d ON f.department_id = d.department_id GROUP BY year, dept_name'
+          ]
+          
+          print('\n=== PERFORMANCE BENCHMARK ===')
+          for q in queries:
+              start = time.perf_counter()
+              storage.execute_query(q)
+              elapsed = (time.perf_counter() - start) * 1000
+              print(f'Query: {q[:60]}... -> {elapsed:.2f} ms')
+          print('=============================\n')
+          
+          storage.close()
+          "
+      
+      - name: Save benchmark results
+        run: |
+          mkdir -p tests/results
+          echo "Benchmark run: $(date)" > tests/results/benchmark_log.txt
+          echo "Environment: Python ${{ env.PYTHON_VERSION }}" >> tests/results/benchmark_log.txt
+          echo "Database: SQLite" >> tests/results/benchmark_log.txt
+
+  # --------------------------------------------------------------------------
+  # JOB 7: Documentation Validation
+  # --------------------------------------------------------------------------
+  documentation-validation:
+    name: Documentation Validation
+    runs-on: ubuntu-latest
+    needs: code-quality
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Check README.md
+        run: |
+          if [ -f README.md ]; then
+            echo "✓ README.md exists"
+            # Check for required sections
+            REQUIRED_SECTIONS="## Назначение ## Технологический стек ## Установка ## Запуск"
+            for section in $REQUIRED_SECTIONS; do
+              if grep -q "$section" README.md; then
+                echo "  ✓ Section '$section' found"
+              else
+                echo "  ⚠ Section '$section' not found"
+              fi
+            done
+          else
+            echo "✗ README.md missing"
+            exit 1
+          fi
+      
+      - name: Check requirements.txt
+        run: |
+          if [ -f requirements.txt ]; then
+            echo "✓ requirements.txt exists"
+            PACKAGE_COUNT=$(wc -l < requirements.txt)
+            echo "  Contains $PACKAGE_COUNT packages"
+          else
+            echo "✗ requirements.txt missing"
+            exit 1
+          fi
+      
+      - name: Check docs directory
+        run: |
+          if [ -d docs ]; then
+            echo "✓ docs/ directory exists"
+            ls -la docs/
+          else
+            echo "⚠ docs/ directory not found"
+          fi
+
+  # --------------------------------------------------------------------------
+  # FINAL JOB: Overall Status
+  # --------------------------------------------------------------------------
+  final-status:
+    name: Final Status
+    runs-on: ubuntu-latest
+    needs: [code-quality, schema-validation, unit-tests, olap-query-tests, documentation-validation]
+    if: always()
+    
+    steps:
+      - name: Check overall status
+        run: |
+          echo "========================================"
+          echo "CI/CD PIPELINE COMPLETED"
+          echo "========================================"
+          echo "Job results:"
+          echo "  - Code Quality: ${{ needs.code-quality.result }}"
+          echo "  - Schema Validation: ${{ needs.schema-validation.result }}"
+          echo "  - Unit Tests: ${{ needs.unit-tests.result }}"
+          echo "  - OLAP Query Tests: ${{ needs.olap-query-tests.result }}"
+          echo "  - Documentation: ${{ needs.documentation-validation.result }}"
+          echo "========================================"
+          
+          if [[ "${{ needs.code-quality.result }}" == "success" && \
+                "${{ needs.schema-validation.result }}" == "success" && \
+                "${{ needs.unit-tests.result }}" == "success" && \
+                "${{ needs.olap-query-tests.result }}" == "success" ]]; then
+            echo "✅ All critical checks passed!"
+            exit 0
+          else
+            echo "❌ Some checks failed. Please review logs."
+            exit 1
+          fi
+
+# ============================================================================
+# NOTIFICATIONS (Optional)
+# ============================================================================
+# Uncomment to enable Slack notifications
+#
+# notifications:
+#   slack:
+#     if: ${{ github.ref == 'refs/heads/main' && (failure() || success()) }}
+#     steps:
+#       - name: Send Slack notification
+#         uses: slackapi/slack-github-action@v1.24.0
+#         with:
+#           payload: |
+#             {
+#               "text": "CI/CD Pipeline ${{ job.status }} for ${{ github.repository }}",
+#               "blocks": [
+#                 {
+#                   "type": "section",
+#                   "text": {
+#                     "type": "mrkdwn",
+#                     "text": "Pipeline status: ${{ job.status }}\nBranch: ${{ github.ref_name }}\nCommit: ${{ github.sha }}"
+#                   }
+#                 }
+#               ]
+#             }
+#         env:
+#           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

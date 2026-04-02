@@ -1,0 +1,8 @@
+====================================================================================================
+Model Name:          ROLAP Star Schema - Hospital Analytics
+Database Type:       SQLite / PostgreSQL
+Schema Type:         Star Schema (схема «звезда»)
+Total Tables:        6 (1 фактовая + 5 измерений)
+Total Columns:       46
+Total Relationships: 5 (FK constraints)
+====================================================================================================

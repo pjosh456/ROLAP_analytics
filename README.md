@@ -49,36 +49,59 @@
 ## Структура проекта
 
 ```bash
-rolap-analytics-system/
+rolap-analytics-demo/
 │
-├── app/
-│   ├── static/
-│   │   ├── css/
-│   │   └── js/
-│   ├── templates/
-│   │   ├── base.html
-│   │   ├── index.html
-│   │   └── dashboard.html
-│   ├── routes.py
-│   ├── analytics.py
-│   ├── db.py
-│   └── models.py
+├── README.md                              # 📖 Основная документация проекта
+├── requirements.txt                       # 📦 Список зависимостей Python
+├── docker-compose.yml                     # 🐳 Docker-конфигурация
+├── .gitignore                             # 🚫 Игнорируемые файлы Git
+├── .env.example                           # 🔧 Пример переменных окружения
 │
-├── sql/
-│   ├── schema.sql
-│   ├── seed.sql
-│   └── queries.sql
+├── config/                                # ⚙️ Конфигурация
+│   ├── __init__.py
+│   └── settings.py                        # Настройки БД, кэша, логирования
 │
-├── screenshots/
-│   ├── dashboard.png
-│   ├── filters.png
-│   ├── drilldown.png
-│   └── logs.png
+├── data/                                  # 💾 Данные
+│   ├── __init__.py
+│   ├── schema.sql                         # 🗄️ SQL-схема (star schema)
+│   ├── seed_data.py                       # 🌱 Генерация тестовых данных
+│   ├── rolap_demo.db                      # 🗃️ SQLite БД (создаётся)
+│   └── exports/                           # 📤 Экспортированные CSV
 │
-├── tests/
-│   └── test_queries.py
+├── src/                                   # 🐍 Исходный код
+│   ├── __init__.py
+│   ├── storage.py                         # 💿 ROLAPStorage (БД + кэш)
+│   ├── query_builder.py                   # 🔨 ROLAPQueryBuilder (SQL)
+│   ├── olap_operations.py                 # 🔄 OLAPOperations (slice, dice, drill)
+│   └── app.py                             # 🌐 Dash-веб-приложение
 │
-├── requirements.txt
-├── run.py
-└── README.md/
-   
+├── notebooks/                             # 📓 Jupyter ноутбуки
+│   └── analysis.ipynb                     # Исследовательский анализ
+│
+├── tests/                                 # 🧪 Тестирование
+│   ├── __init__.py
+│   ├── test_queries.py                    # Модульные тесты SQL
+│   └── results/                           # 📊 Результаты тестов
+│       ├── test_log.txt
+│       └── benchmark_log.txt
+│
+├── docs/                                  # 📚 Документация
+│   ├── star_schema.png                    # 📐 Диаграмма схемы "звезда"
+│   ├── query_examples.sql                 # 📝 Примеры OLAP-запросов
+│   ├── torchinfo_summary.txt              # 📋 Сводка архитектуры
+│   ├── performance_metrics.md             # 📈 Метрики производительности
+│   └── architecture.md                    # 🏗️ Архитектура системы
+│
+├── screenshots/                           # 📸 Скриншоты
+│   ├── dashboard_main.png
+│   ├── department_analysis.png
+│   ├── drill_through.png
+│   └── query_results.png
+│
+├── logs/                                  # 📝 Логи
+│   ├── app.log
+│   └── query.log
+│
+└── .github/                               # 🤖 CI/CD
+    └── workflows/
+        └── ci.yml                         # GitHub Actions
